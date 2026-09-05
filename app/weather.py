@@ -5,6 +5,7 @@ weather value. The composer receives only the `facts` mapping built in this
 module, which is why a reported number can always be traced to an API response.
 """
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -14,6 +15,14 @@ from app import config
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Geocoding is effectively static; a forecast is worth re-fetching sooner.
+# Caching cuts duplicate calls from repeated/identical questions, which is
+# what actually burns through Open-Meteo's free-tier daily quota under real
+# traffic (a retry can't help once that quota, not a transient blip, is the
+# reason for the 429).
+_CACHE_TTL_SECONDS = {GEOCODE_URL: 3600, FORECAST_URL: 300}
+_response_cache = {}
 
 # Requested explicitly: Open-Meteo returns metadata only if no field list is
 # passed, and fields such as uv_index are omitted unless named.
@@ -112,19 +121,46 @@ class WeatherSnapshot:
     fetched_at: str = ""
 
 
-def _get(url, params):
-    try:
-        response = requests.get(url, params=params, timeout=config.HTTP_TIMEOUT)
-    except requests.RequestException as exc:
-        raise WeatherUnavailable(f"could not reach {url}: {exc}") from exc
+def _get(url, params, retries=2, backoff_seconds=0.6):
+    """GET with a small cache and a short retry for transient failures.
 
-    if response.status_code != 200:
-        raise WeatherUnavailable(f"{url} returned HTTP {response.status_code}")
+    Only 429/5xx and network errors are retried — those are the ones a second
+    attempt a moment later can plausibly fix. Any other 4xx means the request
+    itself is wrong, so it's raised immediately instead of retried.
+    """
+    ttl = _CACHE_TTL_SECONDS.get(url, 0)
+    key = (url, tuple(sorted(params.items())))
+    if ttl:
+        cached = _response_cache.get(key)
+        if cached is not None and (time.monotonic() - cached[0]) < ttl:
+            return cached[1]
 
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise WeatherUnavailable(f"{url} returned a non-JSON body") from exc
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=config.HTTP_TIMEOUT)
+        except requests.RequestException as exc:
+            last_error = WeatherUnavailable(f"could not reach {url}: {exc}")
+        else:
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise WeatherUnavailable(f"{url} returned a non-JSON body") from exc
+                if ttl:
+                    _response_cache[key] = (time.monotonic(), payload)
+                return payload
+            if response.status_code == 429 or response.status_code >= 500:
+                last_error = WeatherUnavailable(
+                    f"{url} returned HTTP {response.status_code}"
+                )
+            else:
+                raise WeatherUnavailable(f"{url} returned HTTP {response.status_code}")
+
+        if attempt < retries:
+            time.sleep(backoff_seconds * (attempt + 1))
+
+    raise last_error
 
 
 def geocode(place):
