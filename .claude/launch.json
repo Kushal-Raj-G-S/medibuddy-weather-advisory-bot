@@ -9,6 +9,12 @@
       "autoPort": true
     },
     {
+      "name": "weather-bot-api",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "api.main:app", "--port", "8010"],
+      "port": 8010
+    },
+    {
       "name": "weather-bot-streamlit",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "streamlit", "run", "frontend/streamlit_app.py", "--server.headless", "true"],
