@@ -492,9 +492,20 @@ def verify_node(state):
     sop = state["primary"]["sop"]
     draft = state.get("draft") or ""
 
+    # LangGraph state persists across turns for the same thread_id, and a
+    # node's returned dict only overwrites the keys it actually includes -
+    # every failure return below must explicitly set "citation" to this
+    # turn's honest outcome, even though the failing branch has no real
+    # citation to report. Omitting it was a real bug, confirmed by direct
+    # reproduction: a failed second turn left the FIRST turn's citation
+    # sitting in state, so the UI showed a fully-formed SOP citation next to
+    # a blank answer - the exact "answer that looks policy-backed but isn't"
+    # failure mode this whole system exists to prevent, just self-inflicted
+    # by state leakage rather than the model.
     if not draft.strip():
         return {
             "answer": "",
+            "citation": {"sop_id": None, "reason": "failed_output_validation"},
             "trace": _trace(
                 state,
                 {
@@ -510,6 +521,7 @@ def verify_node(state):
     if not result.ok:
         return {
             "answer": "",
+            "citation": {"sop_id": None, "reason": "failed_output_validation"},
             "trace": _trace(
                 state, {"node": "verify", "ok": False, "violations": result.violations}
             ),

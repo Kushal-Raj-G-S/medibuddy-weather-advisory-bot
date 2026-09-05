@@ -305,6 +305,46 @@ def test_compose_failure_reports_verification_failure_instead_of_crashing(monkey
 
 
 @pytest.mark.offline
+def test_verify_failure_clears_a_prior_turns_stale_citation(monkeypatch):
+    """Checking: reproduced live in a real multi-turn session (see
+    docs/DESIGN.md) - LangGraph's checkpointer persists state across turns,
+    and a node's returned dict only overwrites the keys it includes. The
+    original verify_node failure branches returned {"answer": ""} without a
+    "citation" key, so when turn 2 failed verification, turn 1's real SOP
+    citation was still sitting in the persisted state and leaked through
+    unchanged - the UI would show a fully-formed, correctly-cited SOP next
+    to a blank answer. That is precisely the "answer that looks
+    policy-backed but isn't" failure this whole system exists to prevent,
+    just self-inflicted by state leakage rather than a bad model output.
+    Pass: a failed verify always overwrites citation to the honest
+    failed_output_validation shape, never leaves a previous turn's citation
+    in place."""
+    from app import nodes as nodes_module
+
+    sop = load_policy().by_id("SOP-003")
+    stale_citation_from_turn_1 = {
+        "sop_id": "SOP-012",
+        "sop_title": "General suitability of a leisure outing",
+        "severity": "informational",
+    }
+    state = {
+        "question": "is it safe to cycle?",
+        "snapshot": snapshot(SEVERE_SYSTEM),
+        "primary": {"sop": sop, "evidence": [], "assessment": ""},
+        "co_applying": [],
+        "draft": "",  # simulates this turn's compose producing nothing
+        "citation": stale_citation_from_turn_1,
+        "trace": [],
+    }
+    verify_out = nodes_module.verify_node(state)
+
+    assert verify_out["answer"] == ""
+    assert verify_out["citation"]["sop_id"] is None
+    assert verify_out["citation"]["reason"] == "failed_output_validation"
+    assert verify_out["citation"] != stale_citation_from_turn_1
+
+
+@pytest.mark.offline
 def test_location_fallback_recovers_a_deterministic_parser_miss():
     """Checking: app/nodes.py:_fallback_location. Reproduced empirically (see
     docs/DESIGN.md "Model selection"): nemotron-3-ultra-550b returned an empty

@@ -290,7 +290,35 @@ under more observation, but is not yet added on the strength of four trials.
 Left as a known, stated limitation rather than a fix asserted on thin
 evidence.
 
-## 13. Known gaps
+## 13. A state-leak bug across turns, found via real multi-turn testing
+
+Reproduced live, not hypothesised: asking "is today a good day for a picnic
+in Bengaluru?" then, in the same session, a vague follow-up ("so I can do
+outing for real") once produced a blank answer *alongside a fully-formed
+SOP-012 citation* - severity, category, cited values, all present, next to
+no text. That combination is exactly the failure this whole system exists
+to prevent (an answer that looks policy-backed but isn't), just
+self-inflicted rather than caused by the model.
+
+Root cause: LangGraph's checkpointer persists state across turns for a
+`thread_id`, and a node's returned dict only overwrites the keys it
+includes - keys it omits keep whatever value the previous turn left there.
+`verify_node`'s two failure branches returned `{"answer": ""}` with no
+`"citation"` key, so when turn 2's draft failed (a one-off compose hiccup -
+re-running the identical two turns afterward succeeded normally, confirming
+this is transient, not a permanent break), turn 1's real citation was still
+sitting in state and leaked through unchanged.
+
+Fixed: both branches now explicitly set
+`"citation": {"sop_id": None, "reason": "failed_output_validation"}`, never
+leaving the key unset. Covered by
+`test_verify_failure_clears_a_prior_turns_stale_citation`, which plants a
+stale citation in state before calling `verify_node` directly, so the test
+doesn't depend on reproducing the live timing to stay caught. Every other
+node in `app/nodes.py` was audited for the same pattern (grepped for every
+`"answer": ""` return) - only these two had it.
+
+## 14. Known gaps
 
 - **New operators need code.** Adding rules is pure data, but a genuinely new
   primitive (geospatial, first-class time-of-day windows) means editing
