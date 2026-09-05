@@ -415,6 +415,26 @@ def test_guardrail_does_not_mistake_a_cited_sop_id_for_an_invented_number():
 
 
 @pytest.mark.offline
+def test_guardrail_does_not_mistake_an_elided_sop_id_list_for_invented_numbers():
+    """Checking: prose naturally elides the repeated "SOP-" prefix when listing
+    several co-applying ids in one sentence (e.g. "SOP-003, 007, and 013"), so
+    the regex that strips "SOP-\\d+" only catches the first one. Those bare
+    trailing digit groups are still just ids being cited, not weather figures,
+    as long as they match the co-applying SOPs actually matched this turn.
+    Pass: validate_draft is told which ids co-applied and accepts the elided
+    form; found live via the deployed frontend citing SOP-003/007/013."""
+    sop = load_policy().by_id("SOP-003")
+    result = validation.validate_draft(
+        "Under SOP-003, gusty conditions mean postpone the ride. "
+        "SOP-003, 007, and 013 also apply to this question.",
+        sop,
+        snapshot(SEVERE_SYSTEM),
+        co_applying_ids=["SOP-007", "SOP-013"],
+    )
+    assert result.ok is True, result.violations
+
+
+@pytest.mark.offline
 def test_guardrail_substitutes_real_values():
     """Checking: placeholders resolve to the fetched values with units.
     Pass: the substituted text carries the snapshot's gust figure."""

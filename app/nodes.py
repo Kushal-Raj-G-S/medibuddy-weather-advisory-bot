@@ -145,8 +145,9 @@ of your own, however sensible it seems.
 2. You do not know any weather values. To mention one, write a placeholder in \
 curly braces from the allowed list, exactly as spelled, for example \
 {wind_gusts_10m} or {resolved_location}. The system substitutes the real figure \
-afterwards. Never write a numeral yourself unless it appears verbatim in the \
-policy guidance.
+AND its unit afterwards (e.g. {wind_gusts_10m} becomes "42.8 km/h") - never write \
+a numeral or a unit word (km/h, °C, mm, %, ...) yourself, even right after a \
+placeholder, unless it appears verbatim in the policy guidance.
 3. Name the policy id you are acting under in the reply.
 
 Style: direct, plain, 3-6 sentences. Lead with the risk or verdict, then the \
@@ -531,7 +532,8 @@ def verify_node(state):
             ),
         }
 
-    result = validation.validate_draft(draft, sop, snapshot)
+    co_applying_ids = [c["id"] for c in (state.get("co_applying") or [])]
+    result = validation.validate_draft(draft, sop, snapshot, co_applying_ids)
 
     if not result.ok:
         return {

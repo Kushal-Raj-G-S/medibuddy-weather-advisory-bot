@@ -44,16 +44,25 @@ def format_value(name, value, units):
     return str(value)
 
 
-def _invented_numbers(draft, sop):
+def _invented_numbers(draft, sop, co_applying_ids=()):
     """Numbers the model typed itself that are not thresholds from the policy."""
     stripped = PLACEHOLDER_RE.sub(" ", draft)
     stripped = SOP_ID_RE.sub(" ", stripped)
     allowed_text = f"{sop.guidance} {sop.qualitative_criteria}"
     allowed = set(NUMBER_RE.findall(allowed_text)) | SAFE_NUMBERS
+    # A prose list of co-applying policy ids naturally elides the repeated
+    # "SOP-" prefix (e.g. "SOP-003, 007, and 013"), so SOP_ID_RE only strips
+    # the first one. Those trailing digit groups are still just an id being
+    # cited, not a weather figure, for every SOP actually matched this turn.
+    for sop_id in co_applying_ids:
+        digits = "".join(ch for ch in sop_id if ch.isdigit())
+        if digits:
+            allowed.add(digits)
+            allowed.add(digits.lstrip("0") or "0")
     return sorted({n for n in NUMBER_RE.findall(stripped) if n not in allowed})
 
 
-def validate_draft(draft, sop, snapshot):
+def validate_draft(draft, sop, snapshot, co_applying_ids=()):
     """Substitute placeholders and reject any draft that breaks grounding."""
     violations = []
     used = []
@@ -69,7 +78,7 @@ def validate_draft(draft, sop, snapshot):
         elif name not in used:
             used.append(name)
 
-    invented = _invented_numbers(draft, sop)
+    invented = _invented_numbers(draft, sop, co_applying_ids)
     if invented:
         violations.append(
             "draft contains numbers not traceable to the fetched data or to "
