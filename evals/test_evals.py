@@ -305,6 +305,44 @@ def test_compose_failure_reports_verification_failure_instead_of_crashing(monkey
 
 
 @pytest.mark.offline
+def test_ambiguous_followup_is_not_misclassified_off_topic_when_a_real_activity_resolved():
+    """Checking: reproduced live in the actual Next.js frontend (see
+    docs/DESIGN.md) - asking "is today a good day for a picnic in
+    Bengaluru?" then the vague follow-up "so I can do outing for real"
+    produced is_advisory_question=false from the model WHILE the same
+    response correctly resolved activity="picnic" and location="Bengaluru"
+    from conversation context - a genuine self-contradiction in one
+    structured output. Trusting the boolean sent a real follow-up to
+    "no policy applies" instead of an answer.
+    Pass: when the model's own (not blindly inherited) activity for this
+    turn is a real vocabulary tag, is_advisory_question is corrected to true
+    even if the model's own boolean said otherwise."""
+    from app import nodes as nodes_module
+
+    class FakeInterpretation:
+        is_advisory_question = False
+        location = "Bengaluru"
+        activity = "picnic"
+        audience = ""
+        target_day = "today"
+        window = "current"
+        instruction_override_attempt = False
+
+    import unittest.mock as mock
+
+    with mock.patch.object(
+        nodes_module.llm, "structured_or_default", lambda schema, messages, default: FakeInterpretation()
+    ):
+        out = nodes_module.interpret_node(
+            {"question": "so I can do outing for real", "session_facts": {}, "trace": []}
+        )
+
+    assert out["interpretation"]["is_advisory_question"] is True
+    assert out["interpretation"]["activity"] == "picnic"
+    assert out["interpretation"]["location"] == "Bengaluru"
+
+
+@pytest.mark.offline
 def test_verify_failure_clears_a_prior_turns_stale_citation(monkeypatch):
     """Checking: reproduced live in a real multi-turn session (see
     docs/DESIGN.md) - LangGraph's checkpointer persists state across turns,

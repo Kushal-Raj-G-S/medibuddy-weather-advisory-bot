@@ -217,6 +217,21 @@ def interpret_node(state):
     audience = _vocab_or_blank(result.audience, policy.audiences)
     location = (result.location or "").strip()
 
+    # Reproduced live in a real multi-turn session (see docs/DESIGN.md): for
+    # a vague follow-up like "so I can do outing for real", the model used
+    # the conversation history it was given to correctly resolve activity
+    # and location from context - genuine contextual reasoning, not the
+    # blind inheritance fallback below, since this check runs on the
+    # model's OWN raw output for this call - yet separately, in the same
+    # response, set is_advisory_question=False, contradicting its own
+    # slot-filling. Trusting that boolean over stronger, structural evidence
+    # sent a real follow-up to "no policy applies" instead of an answer.
+    # This only overrides when the MODEL ITSELF resolved a real activity for
+    # this turn (before the code-level inheritance below runs), so a
+    # genuinely unrelated off-topic follow-up - where the model correctly
+    # has no reason to produce an activity - is unaffected.
+    advisory_from_slots = bool(activity)
+
     # Confirmed by direct inspection of the raw model response (see
     # docs/DESIGN.md "Model selection"): on this exact phrasing the model
     # writes the correct location into malformed tool-call JSON that the
@@ -243,7 +258,7 @@ def interpret_node(state):
     audience = audience or prior.get("audience", "")
 
     interpretation = {
-        "is_advisory_question": bool(result.is_advisory_question),
+        "is_advisory_question": bool(result.is_advisory_question) or advisory_from_slots,
         "location": location,
         "activity": activity,
         "audience": audience,
