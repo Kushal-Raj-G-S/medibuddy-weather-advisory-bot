@@ -8,6 +8,148 @@ reply; it never decides what good advice is and never sources a number.
 **Live deployment:** see [DEPLOYMENT.md](DEPLOYMENT.md) — Render (backend) +
 Vercel (frontend).
 
+## Architecture
+
+### System overview
+
+Two frontends, one thin API wrapper, one LangGraph agent. The agent is the
+only thing that talks to weather, the LLM, or the policy file — neither
+frontend, and not the API layer, ever does.
+
+```mermaid
+flowchart LR
+    User(("User"))
+
+    subgraph Frontends
+        NJ["Next.js UI<br/>(Vercel)"]
+        ST["Streamlit UI<br/>(local fallback)"]
+    end
+
+    subgraph Backend
+        API["FastAPI wrapper<br/>api/main.py"]
+        AGENT["LangGraph Agent<br/>app/graph.py"]
+    end
+
+    subgraph External
+        SOPS[("sops/sops.yaml")]
+        WX["Open-Meteo<br/>geocoding + forecast"]
+        LLM["NVIDIA NIM<br/>nemotron-3-ultra-550b + fallbacks"]
+    end
+
+    User --> NJ
+    User --> ST
+    NJ -- "HTTP JSON" --> API
+    API --> AGENT
+    ST -- "direct in-process call, no API hop" --> AGENT
+
+    AGENT -- "read-only, hot-reloaded on every request" --> SOPS
+    AGENT -- "live facts, never cached" --> WX
+    AGENT -- "interpret / judge / compose only" --> LLM
+```
+
+The Next.js UI never imports the agent directly — it only ever sees JSON
+from `api/main.py`, which itself contains zero business logic (it exists
+purely because a browser can't import a Python module). The Streamlit UI
+skips the API hop and imports `app/graph.py` directly, which is why it needs
+no separate server to run. Both paths go through the exact same graph, so
+neither UI can drift from the other's guarantees.
+
+### The graph itself: real branching, not a happy path with a try/except
+
+```mermaid
+flowchart TD
+    START(["User question"]) --> INTERPRET["interpret<br/>free text → structured facts"]
+
+    INTERPRET -- "model chain exhausted" --> FAIL_INTERP["report_interpretation_failed"]
+    INTERPRET -- "prompt-injection attempt detected" --> REFUSE["refuse_override"]
+    INTERPRET -- "no location resolved" --> ASK_LOC["ask_location"]
+    INTERPRET -- "not an outdoor-safety question" --> NO_GUIDANCE["report_no_guidance"]
+    INTERPRET -- "ready" --> FETCH["fetch<br/>Open-Meteo geocode + forecast"]
+
+    FETCH -- "location/API failure" --> UNAVAILABLE["report_unavailable"]
+    FETCH -- "success" --> MATCH["match<br/>evaluate every SOP"]
+
+    MATCH -- "no SOP applies" --> NO_GUIDANCE
+    MATCH -- "SOP(s) matched" --> COMPOSE["compose<br/>number-blind draft"]
+
+    COMPOSE --> VERIFY["verify<br/>substitute real values + guardrail check"]
+    VERIFY -- "guardrail rejected the draft" --> VERIFY_FAIL["report_verification_failure"]
+    VERIFY -- "grounded, valid" --> RECORD["record_turn"]
+
+    FAIL_INTERP --> RECORD
+    REFUSE --> RECORD
+    ASK_LOC --> RECORD
+    NO_GUIDANCE --> RECORD
+    UNAVAILABLE --> RECORD
+    VERIFY_FAIL --> RECORD
+
+    RECORD --> END(["Reply + citation, back to the user"])
+```
+
+Six terminal paths, five of them refusals. Every arrow above is a real
+conditional edge (`app/graph.py:build_graph`) evaluated against graph state —
+the agent physically cannot reach `compose` without a resolved location, a
+successful weather fetch, *and* a matched SOP. `report_no_guidance` is one
+node reached from two different places (an off-topic question, or an
+on-topic question no policy covers) — same honest answer either way, by
+design. `record_turn` is the join point: every path, including refusals,
+gets written into session history, so even a refusal is context for the
+next turn.
+
+### Where the boundary sits — what the model does, what code does
+
+The whole design is one answer to a tension baked into the brief: questions
+arrive as free text that must tolerate paraphrasing, but no advice and no
+number may originate from the model. The resolution: **the model translates,
+it never decides.**
+
+| Concern | Owner | Why |
+| --- | --- | --- |
+| Understanding paraphrase, resolving follow-ups | model | Irreducibly a language problem |
+| Fetching weather | code | Must be the sole fact source |
+| Evaluating numeric SOP conditions | code | Auditable, unit-testable, identical every run |
+| Ranking conflicting SOPs | code | A policy decision, not a judgment call |
+| Judging the one non-numeric SOP | model, narrowly | No threshold exists to check against |
+| Wording the reply | model | Language only, no factual authority |
+| Substituting real numbers, verifying the draft | code | The "never invents a fact" guarantee has to be mechanical, not promised |
+
+The consequence worth noticing: **paraphrase handling and policy matching
+are decoupled.** The model maps "pedal to the office" onto the `cycling`
+vocabulary tag; the rules engine then matches purely on that tag against
+real weather data. Semantic understanding never touches a policy threshold,
+so a fuzzy question can never produce a fuzzy (or fabricated) threshold
+decision.
+
+**The sharpest guarantee in the system:** the compose step is number-blind
+by construction. It never receives a live weather value — only field
+*names* and threshold-relative phrases ("`wind_gusts_10m` is at or above its
+policy threshold"). It writes `{wind_gusts_10m}`; `app/validation.py`
+substitutes the real figure afterward and rejects the whole draft if any
+other numeral appears that isn't a threshold from the SOP's own text. The
+model has no number to misreport — it's not just told not to.
+
+### Component responsibilities
+
+| File | Owns |
+| --- | --- |
+| `sops/sops.yaml` | The policy set. Data, not code — the only source of advice. |
+| `app/sop_loader.py` | Loads/validates policy, derives the activity/audience vocabulary, hot-reloads on file change. |
+| `app/rules.py` | Generic `{field, op, value}` condition evaluator — no rule-specific code exists anywhere. |
+| `app/weather.py` | Open-Meteo geocoding + forecast. The only place a weather fact is ever produced. |
+| `app/nodes.py` | Every graph node: interpret, fetch, match, compose, verify, and the six terminal refusals. |
+| `app/graph.py` | LangGraph wiring — the diagram above, as code. |
+| `app/validation.py` | The output guardrail: placeholder substitution, invented-number and disallowed-field rejection. |
+| `app/llm.py` | Provider-agnostic model access with a fallback chain and crash-safe defaults. |
+| `api/main.py` | Thin FastAPI wrapper — JSON in front of `app/graph.py`, zero business logic. |
+| `web/` | Next.js chat frontend (primary). |
+| `frontend/streamlit_app.py` | Minimal fallback UI, imports the agent directly. |
+| `evals/test_evals.py` | The correctness eval suite, three layers. |
+| `evals/load_test.py` | Concurrency/stress probe (not required by the brief, added anyway). |
+
+Full reasoning behind every decision above — including the ones that turned
+out to be wrong on the first attempt, and how that was found — is in
+[docs/DESIGN.md](docs/DESIGN.md).
+
 ## Setup
 
 ```bash
@@ -118,25 +260,10 @@ conversation:
   known model-variance limitation left open rather than force-fixed
 - `LOAD_TEST_RESULTS.md` — the concurrency probe above
 
-## Layout
-
-```
-sops/sops.yaml            the policy set - data, the only source of advice
-app/sop_loader.py         loads/validates policy, derives vocabulary, hot-reloads
-app/rules.py              generic condition evaluator (no rule-specific code)
-app/weather.py            Open-Meteo geocoding + forecast; the only fact source
-app/nodes.py              graph nodes
-app/graph.py              LangGraph wiring and branching
-app/validation.py         output guardrail: placeholder substitution + checks
-api/main.py               thin FastAPI wrapper around app/graph.py for the web UI
-web/                      Next.js chat frontend (primary)
-frontend/streamlit_app.py minimal fallback chat UI, no separate API server needed
-evals/test_evals.py       eval suite, three layers
-docs/DESIGN.md            every design decision and why
-evals/load_test.py        concurrency/stress probe (not required, added for production-readiness)
-verification/             requirements checklist, live-SOP-add proof, eval + load-test results
-research/                 background research gathered before building
-```
+See **Component responsibilities** in the [Architecture](#architecture)
+section above for what every file owns; `docs/DESIGN.md` for the full
+reasoning; `research/` for background material gathered before building;
+`render.yaml` + `DEPLOYMENT.md` for the live deployment.
 
 ## The SOPs, and why YAML
 
@@ -191,9 +318,3 @@ The one honest caveat: a genuinely new *kind* of comparison (say geospatial
 distance, or a time-of-day window as a first-class operator) would need a new
 operator in `app/rules.py`. Adding rules needs no code; inventing a new
 primitive does. See `docs/DESIGN.md` for the full statement of this limit.
-
-## Design summary
-
-See [docs/DESIGN.md](docs/DESIGN.md) for the reasoning behind the graph shape,
-the deterministic-versus-model boundary, conflict resolution, the number-blind
-composer, and the known gaps.
