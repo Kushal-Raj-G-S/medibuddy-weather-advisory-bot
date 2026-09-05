@@ -37,19 +37,24 @@ thresholds, so a fuzzy input cannot produce a fuzzy threshold decision.
 ## 3. Graph shape
 
 ```
-START → interpret ─┬→ refuse_override ─────────────┐
-                   ├→ ask_location ────────────────┤
-                   ├→ report_no_guidance ──────────┤
-                   └→ fetch ─┬→ report_unavailable ─┤
+START → interpret ─┬→ report_interpretation_failed ─┐
+                   ├→ refuse_override ──────────────┤
+                   ├→ ask_location ─────────────────┤
+                   ├→ report_no_guidance ───────────┤
+                   └→ fetch ─┬→ report_unavailable ──┤
                              └→ match ─┬→ report_no_guidance
                                        └→ compose → verify ─┬→ report_verification_failure
                                                             └→ record_turn → END
 ```
 
-Five terminal paths, four of them refusals. Each branch is a routing function
+Six terminal paths, five of them refusals. Each branch is a routing function
 over graph state, not a `try/except` around a happy path — the graph physically
 cannot reach `compose` without a resolved location, a successful fetch and a
-matched SOP.
+matched SOP. `report_interpretation_failed` (added after a real crash was
+found and fixed — see §12) is what a total interpretation failure routes to,
+distinct from `report_no_guidance`: one means "we hit a technical problem
+understanding you," the other means "we understood and have no policy for
+it" — conflating them would misrepresent what actually happened.
 
 `record_turn` is the join point: every path, including refusals, records the
 turn into message history, so a refusal is still context for the next turn.
@@ -244,6 +249,46 @@ a machine-readable envelope - which means a same-prompt retry cannot fix it
 already came back empty, so a false positive is no worse than the prior
 failure mode (still resolves through `geocode()` / `ask_location`), while a
 true positive recovers an answer the model already had.
+
+**A third finding, the most serious of the three**: during a full eval-suite
+run, `test_clear_match_fuzzy_picnic_question_uses_the_judgment_sop` crashed
+with `AttributeError: 'NoneType' object has no attribute 'assessment'` -
+`llm.structured(Judgment).invoke(...)` returned `None` outright (every model
+in the fallback chain apparently failing to produce a parseable tool call),
+and nothing downstream expected that. The same failure mode existed in
+`interpret_node`'s structured call. Both are architecturally significant: an
+unhandled crash is a *worse* failure than any of the honest refusal paths,
+because it doesn't reach the user as an answer at all - it's a 500, not a
+"we don't have guidance for that." Fixed with `llm.structured_or_default()`
+(`app/llm.py`), used at both call sites, plus a new dedicated terminal node,
+`report_interpretation_failed`, distinct from `report_no_guidance` because
+"we hit a technical problem" and "we understood but have no policy" are
+different facts and conflating them would misrepresent what happened. The
+same crash shape existed in `compose_node` (an empty draft from a total
+compose failure would previously pass `validate_draft` vacuously, since an
+empty string has zero placeholders and zero invented numbers to flag) -
+`verify_node` now checks for a blank draft explicitly before validating.
+All three are covered by offline regression tests
+(`test_interpretation_failure_degrades_honestly_instead_of_crashing`,
+`test_judge_failure_degrades_to_no_match_instead_of_crashing`,
+`test_compose_failure_reports_verification_failure_instead_of_crashing`)
+using a mocked always-`None` model, so this doesn't depend on reproducing the
+live failure to stay caught.
+
+**Repeating the fuzzy-picnic case 4 more times live after the fix** (to check
+whether it still crashes - it didn't, in any of the 4) surfaced a fourth,
+smaller thing worth being honest about: one of the four runs came back with
+no SOP cited when a human would expect SOP-012 to apply. Not a crash, and
+consistent with the same category of model-output variance already
+documented above for location extraction - an approximate one-in-four miss
+rate on this specific judgment call, observed, not asserted precisely (four
+trials is not a real sample size). Unlike the location case, this one isn't fed through a
+deterministic backstop, because "does this fuzzy policy apply" doesn't reduce
+to a regex the way "what's the city name" does - a bounded retry (the same
+pattern used for location) is the natural next fix if this rate holds up
+under more observation, but is not yet added on the strength of four trials.
+Left as a known, stated limitation rather than a fix asserted on thin
+evidence.
 
 ## 13. Known gaps
 

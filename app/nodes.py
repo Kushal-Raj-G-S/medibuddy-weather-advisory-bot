@@ -195,14 +195,22 @@ def interpret_node(state):
     # it needs its own guardrail rather than relying on with_fallbacks, which
     # only reacts to exceptions. One bounded retry catches it without masking
     # a genuinely locationless question (a second empty result is trusted).
-    result = llm.structured(Interpretation).invoke(
-        [("system", system), ("human", user)]
-    )
-    if not (result.location or "").strip() and not prior.get("location"):
-        retry = llm.structured(Interpretation).invoke(
-            [("system", system), ("human", user)]
-        )
-        if (retry.location or "").strip():
+    #
+    # A harder failure - every model in the chain errors, or the endpoint
+    # returns None outright (confirmed live: see docs/DESIGN.md "Model
+    # selection") - must not crash the graph either. structured_or_default
+    # falls back to a blank, non-advisory Interpretation, and
+    # interpretation_failed below routes that to its own honest terminal
+    # node rather than silently mislabelling it as "no policy applies".
+    blank = Interpretation(is_advisory_question=False)
+    messages = [("system", system), ("human", user)]
+    result = llm.structured_or_default(Interpretation, messages, blank)
+    interpretation_failed = result is blank
+    if not interpretation_failed and not (result.location or "").strip() and not prior.get(
+        "location"
+    ):
+        retry = llm.structured_or_default(Interpretation, messages, blank)
+        if retry is not blank and (retry.location or "").strip():
             result = retry
 
     activity = _vocab_or_blank(result.activity, policy.activities)
@@ -242,6 +250,7 @@ def interpret_node(state):
         "target_day": target_day,
         "window": window,
         "override_attempt": bool(result.instruction_override_attempt),
+        "interpretation_failed": interpretation_failed,
     }
 
     return {
@@ -257,6 +266,8 @@ def interpret_node(state):
 
 def route_after_interpret(state):
     interpretation = state.get("interpretation") or {}
+    if interpretation.get("interpretation_failed"):
+        return "report_interpretation_failed"
     if interpretation.get("override_attempt"):
         return "refuse_override"
     if not interpretation.get("is_advisory_question"):
@@ -313,8 +324,14 @@ def _judge(sop, snapshot, question):
         f"Fetched values for {snapshot.resolved_location} "
         f"({snapshot.window}):\n{facts}"
     )
-    verdict = llm.structured(Judgment).invoke(
-        [("system", JUDGE_SYSTEM), ("human", user)]
+    # If every model in the chain fails, treat the judgment SOP as simply
+    # not matching rather than crash: a missed fuzzy match degrades to "no
+    # policy applies" (still an honest, non-inventing answer), which is the
+    # safe direction to fail in - never the reverse (silently claiming a
+    # judgment-based policy applies when no judgment was actually made).
+    default = Judgment(applies=False, assessment="")
+    verdict = llm.structured_or_default(
+        Judgment, [("system", JUDGE_SYSTEM), ("human", user)], default
     )
     # Belt and braces: the composer must stay number-blind, so strip any
     # numeral the judge wrote despite being told not to.
@@ -449,7 +466,21 @@ Values are for {snapshot.window}. Refer to the place as {{resolved_location}}.
 
 {others}"""
 
-    draft = llm.complete(COMPOSE_SYSTEM, user)
+    # A composer failure (every fallback model erroring) must not crash the
+    # request - an empty draft is deliberately treated as an explicit failure
+    # in verify_node below, not silently accepted as "an empty but valid
+    # answer" (validate_draft on "" would otherwise find zero placeholder and
+    # zero invented-number violations and pass it).
+    try:
+        draft = llm.complete(COMPOSE_SYSTEM, user)
+    except Exception as exc:  # noqa: BLE001 - degrade to a failed draft, don't crash
+        draft = ""
+        return {
+            "draft": draft,
+            "trace": _trace(
+                state, {"node": "compose", "sop": sop.id, "error": str(exc)}
+            ),
+        }
     return {
         "draft": draft,
         "trace": _trace(state, {"node": "compose", "sop": sop.id, "chars": len(draft)}),
@@ -459,7 +490,22 @@ Values are for {snapshot.window}. Refer to the place as {{resolved_location}}.
 def verify_node(state):
     snapshot = state["snapshot"]
     sop = state["primary"]["sop"]
-    result = validation.validate_draft(state["draft"], sop, snapshot)
+    draft = state.get("draft") or ""
+
+    if not draft.strip():
+        return {
+            "answer": "",
+            "trace": _trace(
+                state,
+                {
+                    "node": "verify",
+                    "ok": False,
+                    "violations": ["composer returned an empty draft"],
+                },
+            ),
+        }
+
+    result = validation.validate_draft(draft, sop, snapshot)
 
     if not result.ok:
         return {
@@ -505,6 +551,25 @@ def ask_location_node(state):
         "answer": text,
         "citation": {"sop_id": None, "reason": "location_missing"},
         "trace": _trace(state, {"node": "ask_location"}),
+    }
+
+
+def report_interpretation_failed_node(state):
+    """Every model in the interpretation chain failed to produce usable
+    output (all raised, or the endpoint returned None - confirmed to happen
+    live, not hypothetical, see docs/DESIGN.md "Model selection"). A distinct
+    node from report_no_guidance on purpose: this is "we hit a technical
+    problem understanding you," not "we understood and have no policy for
+    it" - conflating the two would misrepresent what actually happened."""
+    text = (
+        "I ran into a technical problem trying to understand that question "
+        "and can't process it right now. Please try rephrasing, or ask again "
+        "in a moment."
+    )
+    return {
+        "answer": text,
+        "citation": {"sop_id": None, "reason": "interpretation_failed"},
+        "trace": _trace(state, {"node": "report_interpretation_failed"}),
     }
 
 

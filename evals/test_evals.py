@@ -234,6 +234,77 @@ def test_guardrail_rejects_a_field_the_sop_may_not_cite():
 
 
 @pytest.mark.offline
+def test_interpretation_failure_degrades_honestly_instead_of_crashing(monkeypatch):
+    """Checking: reproduced live during this build (see docs/DESIGN.md "Model
+    selection") - llm.structured_or_default's underlying call returning None
+    used to crash interpret_node with an unhandled AttributeError instead of
+    reaching any honest terminal node. Pass: the graph returns a clean
+    interpretation_failed refusal, no exception escapes."""
+    monkeypatch.setattr(graph.nodes.llm, "structured", lambda schema, temperature=0.0: type(
+        "AlwaysNone", (), {"invoke": staticmethod(lambda messages: None)}
+    )())
+    result = graph.ask(
+        "is it safe to cycle in Bhopal today?",
+        thread_id="interp-failure",
+        app=fresh_app(),
+    )
+    assert result["citation"].get("reason") == "interpretation_failed"
+    assert "technical problem" in result["answer"].lower()
+
+
+@pytest.mark.offline
+def test_judge_failure_degrades_to_no_match_instead_of_crashing():
+    """Checking: the same None-return failure mode inside _judge (the
+    fuzzy-SOP judgment call) used to raise AttributeError on verdict.assessment.
+    Pass: a failed judgment call is treated as "does not apply", not a crash."""
+    from app import nodes as nodes_module
+
+    sop = load_policy().by_id("SOP-012")
+
+    class AlwaysNone:
+        def invoke(self, messages):
+            return None
+
+    import unittest.mock as mock
+
+    with mock.patch.object(nodes_module.llm, "structured", lambda schema, temperature=0.0: AlwaysNone()):
+        applies, assessment = nodes_module._judge(sop, snapshot(CALM), "is today good for a picnic?")
+
+    assert applies is False
+    assert assessment == ""
+
+
+@pytest.mark.offline
+def test_compose_failure_reports_verification_failure_instead_of_crashing(monkeypatch):
+    """Checking: if every compose-step model call fails, the empty draft that
+    results must not silently pass validate_draft (an empty string has zero
+    placeholders and zero invented numbers, so it would otherwise "pass").
+    Pass: routes to the failed_output_validation refusal, no crash, no blank
+    answer shown as if it were real."""
+    from app import nodes as nodes_module
+
+    def boom(system, user, temperature=0.0):
+        raise RuntimeError("simulated total compose failure")
+
+    monkeypatch.setattr(nodes_module.llm, "complete", boom)
+
+    sop = load_policy().by_id("SOP-003")
+    state = {
+        "question": "is it safe to cycle?",
+        "snapshot": snapshot(SEVERE_SYSTEM),
+        "primary": {"sop": sop, "evidence": [], "assessment": ""},
+        "co_applying": [],
+        "trace": [],
+    }
+    compose_out = nodes_module.compose_node(state)
+    state.update(compose_out)
+    verify_out = nodes_module.verify_node(state)
+
+    assert verify_out["answer"] == ""
+    assert "empty draft" in str(verify_out["trace"][-1]["violations"])
+
+
+@pytest.mark.offline
 def test_location_fallback_recovers_a_deterministic_parser_miss():
     """Checking: app/nodes.py:_fallback_location. Reproduced empirically (see
     docs/DESIGN.md "Model selection"): nemotron-3-ultra-550b returned an empty

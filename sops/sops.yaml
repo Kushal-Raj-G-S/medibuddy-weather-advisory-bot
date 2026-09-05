@@ -371,3 +371,26 @@ sops:
       Do not issue a safety verdict under this policy and do not describe
       conditions as safe or unsafe: if a safety-relevant threshold is genuinely
       breached, a different SOP covers it and will lead the answer instead.
+
+  # ---------------------------------------------------------------------------
+  # SOP-014 added live, 2026-09-05, to demonstrate the "11th SOP on the spot"
+  # requirement: this block is the ONLY change made. No file under app/ was
+  # touched. See verification/SOP_LIVE_ADD_DEMO.md for the before/after proof.
+  # ---------------------------------------------------------------------------
+  - id: SOP-014
+    title: Reduced visibility during outdoor exercise (haze / low air quality)
+    category: outdoor_exercise
+    severity: moderate
+    applies_to:
+      activities: [running, cycling, walking, hiking]
+      audiences: [any]
+    conditions:
+      all_of:
+        - {field: visibility, op: "<=", value: 4000}
+    cite_fields: [visibility, resolved_location]
+    guidance: >
+      Advise shortening or relocating the session while visibility is at or
+      below 4000 m, since haze or particulate loading at this level can
+      irritate airways during sustained exertion. Recommend an indoor
+      alternative for anyone with asthma or a respiratory condition, and
+      recommend a lower-intensity effort if the session goes ahead outdoors.

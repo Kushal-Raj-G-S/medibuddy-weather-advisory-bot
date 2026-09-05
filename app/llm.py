@@ -66,6 +66,25 @@ def get_llm(temperature=0.0):
     return primary.with_fallbacks(rest) if rest else primary
 
 
+def structured_or_default(schema, messages, default, temperature=0.0):
+    """Invoke a structured call; return `default` instead of raising if the
+    call errors, and instead of crashing the caller if it returns None.
+
+    Confirmed necessary empirically, not defensive-for-its-own-sake: on this
+    NVIDIA NIM endpoint, with_structured_output can return None when even the
+    last model in the fallback chain fails to produce a parseable tool call
+    (see docs/DESIGN.md "Model selection" - reproduced live, not assumed).
+    Every structured call in app/nodes.py goes through this so a single
+    hosted-model hiccup degrades to an honest terminal node instead of an
+    unhandled AttributeError crashing the whole request.
+    """
+    try:
+        result = structured(schema, temperature).invoke(messages)
+    except Exception:
+        return default
+    return result if result is not None else default
+
+
 def structured(schema, temperature=0.0):
     """Bind a Pydantic schema so the model cannot return anything off-shape.
 

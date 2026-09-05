@@ -1,24 +1,25 @@
 """The LangGraph wiring.
 
-                          ┌─ refuse_override ────────────┐
-                          ├─ ask_location ───────────────┤
-  START ─ interpret ──────┼─ report_no_guidance ─────────┤
-                          │                              │
-                          └─ fetch ─┬─ report_unavailable ┤
-                                    │                     │
+                          ┌─ refuse_override ─────────────┐
+                          ├─ ask_location ─────────────────┤
+                          ├─ report_no_guidance ───────────┤
+  START ─ interpret ──────┼─ report_interpretation_failed ─┤
+                          │                                │
+                          └─ fetch ─┬─ report_unavailable ──┤
+                                    │                       │
                                     └─ match ─┬─ report_no_guidance
-                                              │           │
+                                              │             │
                                               └─ compose ─ verify
                                                             │
                                        report_verification_failure
                                                             │
                                               record_turn ─ END
 
-Five terminal paths reach the user, four of which are refusals. The failure
+Six terminal paths reach the user, five of which are refusals. The failure
 branches are real edges, not an exception handler wrapped around a happy path:
-whether the location resolved, whether the API answered, whether any policy
-matched and whether the draft survived validation are each a separate routing
-decision on graph state.
+whether interpretation itself succeeded, whether the location resolved,
+whether the API answered, whether any policy matched and whether the draft
+survived validation are each a separate routing decision on graph state.
 """
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -33,6 +34,7 @@ TERMINALS = {
     "report_no_guidance": nodes.report_no_guidance_node,
     "refuse_override": nodes.refuse_override_node,
     "report_verification_failure": nodes.report_verification_failure_node,
+    "report_interpretation_failed": nodes.report_interpretation_failed_node,
 }
 
 
@@ -54,6 +56,7 @@ def build_graph(checkpointer=None):
         "interpret",
         nodes.route_after_interpret,
         {
+            "report_interpretation_failed": "report_interpretation_failed",
             "refuse_override": "refuse_override",
             "ask_location": "ask_location",
             "report_no_guidance": "report_no_guidance",
