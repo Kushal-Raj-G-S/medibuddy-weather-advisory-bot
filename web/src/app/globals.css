@@ -1,0 +1,348 @@
+@import "tailwindcss";
+
+:root {
+  --bg-deep: #050810;
+  --panel: 255 255 255;
+  --panel-alpha: 0.055;
+  --panel-alpha-strong: 0.09;
+  --panel-border: 255 255 255;
+  --panel-border-alpha: 0.1;
+  --text-primary: #f6f8ff;
+  --text-muted: #93a2c4;
+  --text-faint: #5c6a8c;
+  --accent: #7dd3fc;
+
+  --sev-informational: 96 165 250;
+  --sev-low: 52 211 153;
+  --sev-moderate: 250 204 21;
+  --sev-high: 251 146 60;
+  --sev-critical: 248 113 113;
+  --sev-neutral: 148 163 184;
+}
+
+@theme inline {
+  --color-background: var(--bg-deep);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  overflow-x: hidden;
+  letter-spacing: -0.006em;
+}
+
+::selection {
+  background: rgb(var(--sev-informational) / 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* -------------------------------------------------------------------- */
+/* Surfaces                                                               */
+/* -------------------------------------------------------------------- */
+
+.glass {
+  position: relative;
+  background: linear-gradient(
+    165deg,
+    rgb(var(--panel) / calc(var(--panel-alpha) + 0.03)),
+    rgb(var(--panel) / var(--panel-alpha))
+  );
+  border: 1px solid rgb(var(--panel-border) / var(--panel-border-alpha));
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.06) inset,
+    0 24px 48px -24px rgba(0, 0, 0, 0.55);
+}
+
+.glass-strong {
+  background: linear-gradient(
+    165deg,
+    rgb(var(--panel) / calc(var(--panel-alpha-strong) + 0.03)),
+    rgb(var(--panel) / var(--panel-alpha-strong))
+  );
+  border: 1px solid rgb(var(--panel-border) / 0.14);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.08) inset,
+    0 30px 60px -28px rgba(0, 0, 0, 0.6);
+}
+
+.hairline {
+  border-color: rgb(var(--panel-border) / var(--panel-border-alpha));
+}
+
+.font-display {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+}
+
+.text-gradient {
+  background: linear-gradient(120deg, #eef6ff 0%, #9cc7fb 45%, #c9b6fb 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Noise, applied over everything at very low opacity for a physical, non-flat
+   surface feel instead of a smooth vector-flat gradient. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.045;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* -------------------------------------------------------------------- */
+/* Weather-reactive sky background                                       */
+/* -------------------------------------------------------------------- */
+
+.sky {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  transition: background 1.8s ease;
+}
+
+.sky::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 80% 50% at 50% -10%,
+    rgba(255, 255, 255, 0.1),
+    transparent 60%
+  );
+  pointer-events: none;
+}
+
+.sky-informational {
+  background: linear-gradient(170deg, #071129 0%, #0f2350 42%, #17346f 78%, #1c3f82 100%);
+}
+.sky-low {
+  background: linear-gradient(170deg, #041d29 0%, #0a3745 42%, #10505a 78%, #147268 100%);
+}
+.sky-moderate {
+  background: linear-gradient(170deg, #1c1330 0%, #302247 42%, #46335f 78%, #5c4270 100%);
+}
+.sky-high {
+  background: linear-gradient(170deg, #250e04 0%, #3c1808 42%, #55230e 78%, #6e2f14 100%);
+}
+.sky-critical {
+  background: linear-gradient(170deg, #08070c 0%, #171018 42%, #221019 78%, #2c1420 100%);
+}
+.sky-neutral {
+  background: linear-gradient(170deg, #04070f 0%, #0a1226 42%, #101c3c 78%, #142450 100%);
+}
+
+/* Slow-drifting colour glows for depth, independent of severity - the kind
+   of soft aurora glow modern product UIs use instead of a flat gradient. */
+.aurora {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: 0.5;
+  animation: aurora-float 26s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+
+@keyframes aurora-float {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(4%, -6%) scale(1.08);
+  }
+  66% {
+    transform: translate(-5%, 4%) scale(0.95);
+  }
+}
+
+.cloud {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(32px);
+  background: rgba(255, 255, 255, 0.06);
+  animation: drift linear infinite;
+}
+
+@keyframes drift {
+  from {
+    transform: translateX(-15vw);
+  }
+  to {
+    transform: translateX(115vw);
+  }
+}
+
+.star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: white;
+  animation: twinkle 3.5s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+.rain {
+  position: absolute;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(180, 210, 255, 0.55));
+  animation: fall linear infinite;
+}
+
+@keyframes fall {
+  from {
+    transform: translateY(-10vh);
+  }
+  to {
+    transform: translateY(110vh);
+  }
+}
+
+.lightning-flash {
+  position: fixed;
+  inset: 0;
+  z-index: -5;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes flash {
+  0% {
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.55;
+  }
+  8% {
+    opacity: 0.05;
+  }
+  12% {
+    opacity: 0.4;
+  }
+  20% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.lightning-flash.active {
+  animation: flash 1.8s ease-out 1;
+}
+
+.sun {
+  position: absolute;
+  top: 8%;
+  right: 12%;
+  width: 160px;
+  height: 160px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 244, 214, 0.9), rgba(255, 244, 214, 0) 70%);
+  filter: blur(2px);
+  animation: pulse-slow 6s ease-in-out infinite;
+}
+
+@keyframes pulse-slow {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  animation: bounce-dot 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bounce-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.04) 30%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.04) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.glow-ring {
+  box-shadow: 0 0 0 1px rgb(var(--panel-border) / 0.12), 0 0 24px -4px currentColor;
+}

@@ -26,7 +26,36 @@ ANTHROPIC_MODEL=claude-sonnet-4-5
 `LLM_PROVIDER=openai` with `OPENAI_API_KEY` works identically. Open-Meteo needs
 no key.
 
-## Run the chat frontend
+## Run the chat frontend (Next.js — primary)
+
+The main frontend is a Next.js app that talks to a small FastAPI wrapper around
+`app/graph.py`. Nothing about the graph, the guardrails or the SOPs changes for
+the web UI — the API layer only turns `ask()` into JSON.
+
+```bash
+# Terminal 1 - backend API (from the repo root, venv active)
+pip install -r requirements.txt
+uvicorn api.main:app --reload --port 8000
+
+# Terminal 2 - frontend
+cd web
+npm install
+cp .env.local.example .env.local   # points at http://localhost:8000 by default
+npm run dev
+```
+
+Open the printed `localhost` URL. The background sky reacts live to the
+severity of the last answer (calm/sunny → stormy/lightning for a critical
+override), each reply has an expandable **citation card** (policy id,
+category, the exact fetched values it was allowed to quote, any co-applying
+SOPs) and a **decision trace** (every graph node's routing decision). The
+sidebar lists the loaded policy set straight from `sops/sops.yaml` — add an
+11th SOP to that file and it shows up on the next question, no restart.
+
+## Run the chat frontend (Streamlit — minimal fallback)
+
+A simpler, dependency-light frontend that talks to the graph directly
+in-process (no separate API server needed):
 
 ```bash
 streamlit run frontend/streamlit_app.py
@@ -37,7 +66,7 @@ SOP that produced it and the exact fetched values it was allowed to quote, and
 **Decision trace** to see what every node decided, including which SOPs were
 evaluated and rejected.
 
-## Run the backend without the UI
+## Run the backend without any UI
 
 ```bash
 python -c "from app.graph import ask; import json; print(json.dumps(ask('is it safe to cycle in Bhopal today?'), indent=2, default=str))"
@@ -69,7 +98,9 @@ app/weather.py            Open-Meteo geocoding + forecast; the only fact source
 app/nodes.py              graph nodes
 app/graph.py              LangGraph wiring and branching
 app/validation.py         output guardrail: placeholder substitution + checks
-frontend/streamlit_app.py minimal chat UI with citation panel
+api/main.py               thin FastAPI wrapper around app/graph.py for the web UI
+web/                      Next.js chat frontend (primary)
+frontend/streamlit_app.py minimal fallback chat UI, no separate API server needed
 evals/test_evals.py       eval suite, three layers
 docs/DESIGN.md            every design decision and why
 research/                 background research gathered before building
