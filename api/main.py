@@ -6,8 +6,11 @@ Python, and a browser cannot import a Python module directly. Every rule
 about traceability and grounding is enforced upstream in app/nodes.py and
 app/validation.py exactly as before - this file just puts JSON in front of it.
 
-Run:  uvicorn api.main:app --reload --port 8000
+Run locally:  uvicorn api.main:app --reload --port 8000
+Deploy:       see DEPLOYMENT.md (Render, via render.yaml at the repo root)
 """
+
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,11 +21,20 @@ from app.sop_loader import SOPFileError, load_policy
 
 app = FastAPI(title="Weather Advisory Bot API")
 
+# CORS_ALLOW_ORIGINS: comma-separated list of exact origins to allow in
+# production (e.g. the deployed Vercel URL), set via the hosting platform's
+# env vars - never hardcoded, since the deployed frontend's URL isn't known
+# until it exists. Falls back to any localhost port for local development.
+_extra_origins = [
+    o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    # The Next.js dev server's port can shift (auto-assigned if 3000 is taken),
-    # so any localhost port is allowed in development rather than one fixed
-    # origin.
+    allow_origins=_extra_origins,
+    # The Next.js dev server's port can shift (auto-assigned if 3000 is
+    # taken), so any localhost port is allowed for local development
+    # regardless of CORS_ALLOW_ORIGINS.
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
     allow_methods=["*"],
     allow_headers=["*"],

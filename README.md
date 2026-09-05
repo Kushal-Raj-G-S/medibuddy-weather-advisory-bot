@@ -5,6 +5,9 @@ Open-Meteo data, where **every answer is either traceable to a written policy
 (SOP) or an explicit refusal**. The model interprets language and phrases the
 reply; it never decides what good advice is and never sources a number.
 
+**Live deployment:** see [DEPLOYMENT.md](DEPLOYMENT.md) — Render (backend) +
+Vercel (frontend).
+
 ## Setup
 
 ```bash

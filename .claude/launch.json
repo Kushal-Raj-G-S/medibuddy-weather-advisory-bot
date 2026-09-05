@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev", "--prefix", "web"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "weather-bot-streamlit",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "frontend/streamlit_app.py", "--server.headless", "true"],
+      "port": 8501,
+      "autoPort": true
     }
   ]
 }
