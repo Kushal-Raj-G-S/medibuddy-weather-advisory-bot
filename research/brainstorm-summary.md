@@ -1,0 +1,60 @@
+# Brainstorm Summary: Candidate Architectures & Open Design Questions
+
+**This file does not recommend a final decision.** It synthesizes the other research files into candidate high-level approaches with tradeoffs, plus the open questions the user still needs to decide before building. See `langgraph-patterns.md`, `open-meteo-api.md`, `policy-as-data-design.md`, `llm-eval-suite-design.md`, and `imd-weather-context.md` for the underlying research.
+
+## Candidate architecture approaches for SOP-matching + graph design
+
+### Approach A: "All SOPs in context, LLM matches directly"
+Every turn, the `match_policy` LangGraph node loads the full current SOP set (from the JSON/YAML rules file, per `policy-as-data-design.md` §1/§5) and passes all SOP text + the user's question + the fetched weather data to the LLM in one prompt, asking it to output which SOP id(s) apply (or none).
+
+- **Pros:** Simplest to build — no embedding infrastructure, no similarity-threshold tuning; naturally handles the fuzzy/non-numeric SOP requirement since the LLM reasons over full SOP text; trivially supports a live-added 11th SOP (just appears in the next prompt); good paraphrase robustness since the LLM reads full sentences, not keywords.
+- **Cons:** Every turn costs a full LLM call with all SOP text in context (fine at 10-20 SOPs, would not scale to hundreds); LLM SOP-selection is less deterministic/inspectable than an embedding-similarity score — you can't easily unit-test "similarity was 0.83" the way you can with vector approaches; slightly higher risk surface for prompt injection since the whole policy text and matching logic live inside one LLM call (see `llm-eval-suite-design.md` §5).
+- **Referenced in:** `langgraph-patterns.md` §3 (fits directly as the `match_policy` node), `policy-as-data-design.md` §3.
+
+### Approach B: "Embedding-based semantic router + LLM composes only"
+Precompute an embedding per SOP (from its title/description/seed phrasings) at load time. The `match_policy` node embeds the user's question, does a cosine-similarity lookup against the fixed SOP set, and applies a similarity threshold to decide match vs no-match. A separate, later node then has the LLM compose the final answer using *only* the matched SOP text + weather data (LLM never sees the full rule set or decides matching itself).
+
+- **Pros:** Deterministic, fast, cheap per-turn matching; clean separation of concerns (matching logic vs. answer composition are different code/model layers); the LLM's job shrinks to "write an answer from this one given SOP + these numbers," which narrows its injection attack surface since it isn't asked to pick among a whole rule set.
+- **Cons:** Needs an embedding model dependency and a similarity-threshold decision (too loose → false matches on unrelated questions; too tight → misses real paraphrases) — that threshold is itself an undocumented, easy-to-mistune policy knob, as flagged in `policy-as-data-design.md` §5; awkward fit for the fuzzy/non-numeric SOP, since "is this a good picnic day" isn't really about lexical/semantic similarity to a canned phrase, it's a judgment call that needs live weather numbers factored in — embeddings alone can route *to* that SOP but can't evaluate it.
+- **Referenced in:** `policy-as-data-design.md` §2 (item 2) and §3.
+
+### Approach C: "Two-stage hybrid — LLM matches, then LLM composes, as separate nodes"
+Split matching and composition into two distinct LangGraph nodes/LLM calls: node 1 gets the question + all SOP *titles and short descriptions only* (not full policy text) and returns matched SOP id(s); node 2 gets only the matched SOP's *full* text + the weather data and composes the answer.
+
+- **Pros:** Reduces the injection surface of node 2 (it never sees the whole rule set, so it can't be tricked into fabricating a different policy's content); keeps node 1's prompt small (titles/descriptions only) which may improve matching reliability at larger SOP counts; still fully LLM-based so fuzzy SOPs work naturally; maps cleanly onto the "match_policy → compose_answer" two-node shape already described in `langgraph-patterns.md` §3.
+- **Cons:** Two LLM calls per turn instead of one (latency/cost); still not as deterministic/testable as embedding similarity for the "clear keyword match" eval cases; matching quality still depends on how well node 1's short descriptions capture what each SOP is about.
+- **Referenced in:** `langgraph-patterns.md` §3, `policy-as-data-design.md` §3, `llm-eval-suite-design.md` §5 (narrower injection surface directly helps the adversarial eval case).
+
+### Approach D: "Rule-based numeric pre-filter + LLM only for fuzzy/tie-break cases"
+Most SOPs are numeric (e.g., "wind gusts > 40 km/h → high severity"); a fast deterministic pre-filter (plain Python conditionals reading rule *thresholds* from the data file, not hardcoded values) evaluates all numeric SOPs directly against the fetched weather data with no LLM call. Only if no numeric SOP matches — or if the question is inherently non-numeric (e.g., "is today good for a picnic") — does the flow fall through to an LLM-based match against the fuzzy SOPs specifically.
+
+- **Pros:** Maximizes determinism/testability for the majority-numeric SOPs (matches directly, no LLM ambiguity, cheapest/fastest path); isolates the "judgment call" LLM usage to only the SOPs that actually need it, narrowing where hallucination/injection risk can occur; still keeps thresholds as editable data (a numeric SOP's threshold value lives in the rules file, only the *evaluation code* — "is value > threshold" — is in Python, which stays generic/reusable across any numeric SOP without being rule-specific).
+- **Cons:** Requires the rules file to distinguish "numeric-evaluable" SOPs (with a machine-readable condition, e.g. `{"field": "wind_gusts_10m", "operator": ">", "value": 40}`) from "fuzzy" SOPs (free text only) — a more complex rule schema than Approaches A-C; the boundary between "numeric" and "fuzzy" needs careful handling for questions that combine both (e.g., "is it safe to cycle AND is it a nice day out") so it doesn't silently apply only one path when both should be considered; risk that the generic numeric-condition evaluator itself becomes "control-flow code" that must be touched if a genuinely new *kind* of numeric comparison is needed later (though adding a new SOP with an existing operator would still need zero code changes).
+- **Referenced in:** `policy-as-data-design.md` §1 (rules-engine `conditions`/`actions` pattern) and §6.
+
+### Approach E: "SOP set fully in-context + retrieval reserved for future scale (RAG-lite, no vector DB now)"
+Functionally similar to Approach A for the current ~10-15 SOP count, but explicitly designed with a swappable matching interface (e.g., a `match(question, sop_set) -> matched_ids` function) so the *implementation* could later be swapped for an embedding-based router (Approach B) without touching the graph structure or the SOP data format, if the SOP count later grows beyond what fits comfortably in context.
+
+- **Pros:** Avoids premature infrastructure (no vector DB / embedding pipeline needed to satisfy today's ~10 SOP requirement) while not architecturally boxing out a future upgrade; directly reflects the RAG-lite framing in `policy-as-data-design.md` §3 ("small fixed rule set doesn't need full RAG infra").
+- **Cons:** Designing a clean swappable interface is itself extra upfront design effort that may not be needed at all for a take-home scoped to ~10-15 SOPs; risk of over-engineering for a scale the assignment doesn't ask for.
+- **Referenced in:** `policy-as-data-design.md` §3, §6.
+
+## Open questions / design decisions still to make
+
+1. **Rules file format: JSON vs YAML?** YAML is friendlier for a human "policy owner" to hand-edit live (comments, less punctuation) but has whitespace-sensitivity risk; JSON is more rigid/unambiguous but harder to hand-edit correctly for someone adding SOP #11 live during a demo. (`policy-as-data-design.md` §5)
+
+2. **Matching mechanism: LLM-in-context (A), embedding similarity (B), two-stage LLM (C), numeric-pre-filter hybrid (D), or a scale-ready swappable interface (E)?** This is the central open tension across the research — see "Most important design tension" below.
+
+3. **Rule schema shape for numeric vs fuzzy SOPs** — does every SOP get a uniform schema (free-text condition description + free-text action, always LLM-matched), or a richer schema that distinguishes machine-evaluable numeric conditions (structured `field`/`operator`/`value`) from free-text fuzzy conditions? This decision cascades into how much of Approach D is feasible.
+
+4. **How to resolve multiple-SOP-match conflicts** — if two or more SOPs match the same question (e.g., a "high wind" SOP and a "heavy rain" SOP both trigger for the same cycling question), does the bot: (a) report all matched SOPs and their combined guidance, (b) apply a severity-ranking rule so the highest-severity SOP wins and is the only one surfaced, or (c) require a `priority`/`severity_rank` field in the rule schema so ties are broken deterministically? None of the research files prescribe an answer — this needs an explicit policy of its own, and arguably should itself be documented (a "meta-SOP" for conflict resolution) rather than left as implicit code behavior.
+
+5. **What state to carry in LangGraph memory across turns** — beyond the message history (which the checkpointer/thread handles automatically per `langgraph-patterns.md` §2), should the graph state also explicitly carry things like "last resolved location," "last activity type asked about," or "SOPs already surfaced this session" so follow-up turns like "what about this evening?" resolve correctly without the user re-stating location/activity? This is a product-behavior decision, not just a technical one — it affects how much implicit context-carrying the bot does vs. asking the user to re-clarify.
+
+6. **Similarity-threshold tuning (only relevant if Approach B or a hybrid using embeddings is chosen)** — what similarity score counts as "matched" vs "no SOP applies," and how is that threshold itself validated/tested? `policy-as-data-design.md` §5 flags this threshold as effectively an undocumented policy decision in its own right if left as a bare code constant.
+
+7. **How strictly to isolate the fuzzy/non-numeric SOP's evaluation from live data** — for something like "is today good for a picnic," does the LLM get the raw Open-Meteo numbers and reason freely (risk: less consistent judgment calls across similar-but-not-identical days), or does the fuzzy SOP itself define more explicit-but-still-qualitative guidance (e.g., "no picnic if precipitation probability is high AND temperature is uncomfortable, otherwise generally favorable, but note factors") that narrows the LLM's freedom while still not being a hard numeric threshold? This is the crux of what "fuzzy but not free-floating judgment" means in practice, and the research didn't turn up a single settled convention — it's a genuine open call for this project.
+
+## Most important design tension across all research (for the final summary)
+
+The single biggest tension: **the brief demands both (a) that policy matching handle fuzzy/paraphrased free text (which favors LLM- or embedding-based semantic matching) and (b) that the bot never give advice beyond what traces back to a written SOP (which favors the most deterministic, narrowly-scoped, least-LLM-discretion matching mechanism possible, to minimize hallucination and prompt-injection surface).** Every candidate approach above trades off somewhere on this axis — full-context LLM matching (A) is most flexible but broadest injection surface; embedding routing (B) is most deterministic but weakest at genuinely fuzzy SOPs; the two-stage (C) and numeric-pre-filter hybrid (D) approaches are attempts to get "flexible where it must be, narrow everywhere else," at the cost of added design complexity. This is the decision the user will need to make deliberately rather than defaulting to whichever is easiest to code first.

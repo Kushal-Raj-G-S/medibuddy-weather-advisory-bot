@@ -1,0 +1,373 @@
+# =============================================================================
+# Standard Operating Procedures (SOPs) - Weather Advisory Policy Set
+# =============================================================================
+# This file is DATA, not code. It is the single source of truth for what advice
+# the bot is allowed to give. Adding, editing or removing an SOP here requires
+# NO changes to any Python file: the loader derives the activity/audience
+# vocabulary, the severity ranking and the citable-field allowlist from this
+# file at load time.
+#
+# Schema per SOP:
+#   id                  Stable identifier cited back to the user. Required, unique.
+#   title               Short human label.
+#   category            Grouping label. New categories need no code change.
+#   severity            Must appear in `severity_order` below.
+#   override            Optional. If true, this SOP pre-empts and leads the answer.
+#   applies_to
+#     activities        Activity tags this SOP covers, or [any].
+#     audiences         Audience tags (self/child/elderly/pet/...), or [any].
+#   conditions          Optional. Machine-evaluable numeric/enum condition tree.
+#                       Omit it to make the SOP a judgment-based ("fuzzy") rule.
+#                       Tree nodes: all_of / any_of / none_of, leaves are
+#                       {field, op, value}. Supported ops:
+#                       >= <= > < == != in not_in between
+#                       `field` must be a weather field name that the fetcher
+#                       actually returns (see app/weather.py FIELD_SPEC).
+#   qualitative_criteria  Optional. Free text used ONLY for judgment-based SOPs.
+#                       The model weighs these factors against real fetched
+#                       values; it never invents its own criteria.
+#   cite_fields         Allowlist of weather fields this SOP's answer may quote.
+#                       The composer can only reference these; anything else is
+#                       rejected by app/validation.py.
+#   guidance            The human-written advice. This is the ONLY source of
+#                       recommendation content. The model rephrases it, it never
+#                       adds advice of its own.
+# =============================================================================
+
+version: 1
+
+# Ranking used for conflict resolution. Lowest first.
+severity_order: [informational, low, moderate, high, critical]
+
+conflict_resolution:
+  strategy: override_first_then_highest_severity_with_disclosure
+  # Decided deliberately (see docs/DESIGN.md "Conflict resolution"):
+  #  1. Any SOP with override:true leads the answer, regardless of category.
+  #  2. Otherwise the highest-severity matching SOP becomes the primary citation.
+  #  3. Ties broken by declaration order in this file (stable, inspectable).
+  #  4. All other matching SOP ids are ALWAYS disclosed alongside the primary,
+  #     so a reviewer can see everything that fired, not just the winner.
+  rationale: >
+    Under-warning is the expensive failure mode for a safety advisory, so the
+    most severe applicable policy leads. Suppressing the others entirely would
+    hide policy coverage from both the user and an auditor, so they are listed
+    but not expanded.
+
+no_match_response: >
+  We don't have written guidance covering that, so we can't advise on it.
+  Our policy set currently covers outdoor exercise, travel and commuting,
+  vulnerable groups (children, elderly, pets) and general leisure outings.
+
+sops:
+  # ---------------------------------------------------------------------------
+  # CATEGORY: situational_override
+  # ---------------------------------------------------------------------------
+  - id: SOP-001
+    title: Active low-pressure / heavy-rain weather system
+    category: situational_override
+    severity: critical
+    override: true
+    applies_to:
+      activities: [any]
+      audiences: [any]
+    # Situational risk that no single threshold captures: depressed sea-level
+    # pressure AND sustained heavy rainfall AND elevated gusts occurring
+    # together indicate an organised system rather than a passing shower.
+    conditions:
+      all_of:
+        - {field: pressure_msl, op: "<=", value: 1008}
+        - {field: precipitation_sum, op: ">=", value: 15}
+        - {field: wind_gusts_10m_max, op: ">=", value: 35}
+    cite_fields:
+      [pressure_msl, precipitation_sum, precipitation, wind_gusts_10m_max,
+       wind_gusts_10m, precipitation_probability_max, visibility, resolved_location]
+    guidance: >
+      Lead with the weather system itself before any activity-specific advice.
+      Conditions indicate an active organised rain system over the location,
+      not isolated showers: sea-level pressure at or below 1008 hPa with daily
+      rainfall at or above 15 mm and wind gusts at or above 35 km/h. Treat every
+      outdoor-activity question as high risk regardless of category. Advise
+      postponing non-essential outdoor plans while the system is over the area,
+      state that conditions can change quickly through the day, and recommend
+      checking the India Meteorological Department (IMD) bulletin for the
+      district before travelling. Do not downgrade this advice because an
+      individual reading looks unremarkable on its own.
+
+  - id: SOP-002
+    title: Thunderstorm or lightning activity
+    category: situational_override
+    severity: critical
+    override: true
+    applies_to:
+      activities: [any]
+      audiences: [any]
+    conditions:
+      any_of:
+        - {field: weather_code, op: in, value: [95, 96, 97, 98, 99]}
+        - {field: weather_code_daily, op: in, value: [95, 96, 97, 98, 99]}
+    cite_fields: [weather_code, weather_code_daily, precipitation, wind_gusts_10m, resolved_location]
+    guidance: >
+      Advise against all outdoor activity while thunderstorm conditions are
+      reported. Lightning risk is not reducible to a comfort trade-off: direct
+      the user to stay indoors, away from open ground, tall isolated trees,
+      water and metal structures, and to wait at least 30 minutes after the last
+      audible thunder before resuming outdoor plans. This applies to every
+      activity category including short commutes.
+
+  # ---------------------------------------------------------------------------
+  # CATEGORY: outdoor_exercise
+  # ---------------------------------------------------------------------------
+  - id: SOP-003
+    title: Strong wind gusts during cycling or two-wheeler use
+    category: outdoor_exercise
+    severity: high
+    applies_to:
+      activities: [cycling, motorcycling]
+      audiences: [any]
+    conditions:
+      any_of:
+        - {field: wind_gusts_10m, op: ">=", value: 40}
+        - {field: wind_gusts_10m_max, op: ">=", value: 40}
+    cite_fields: [wind_gusts_10m, wind_gusts_10m_max, wind_speed_10m, resolved_location]
+    guidance: >
+      Treat this as a safety risk, not a comfort issue. Gusts at or above
+      40 km/h can move a bicycle or two-wheeler out of its lane, and the risk is
+      highest on exposed stretches, bridges, flyovers and when overtaking or
+      being overtaken by heavy vehicles. Advise postponing the ride if it is
+      discretionary. If the trip is unavoidable, recommend reducing speed,
+      keeping both hands on the handlebars, avoiding exposed elevated roads,
+      and choosing a sheltered route even if it is longer.
+
+  - id: SOP-004
+    title: High UV exposure during midday outdoor exercise
+    category: outdoor_exercise
+    severity: moderate
+    applies_to:
+      activities: [cycling, running, walking, hiking, sports_field, swimming]
+      audiences: [any]
+    conditions:
+      any_of:
+        - {field: uv_index, op: ">=", value: 8}
+        - {field: uv_index_max, op: ">=", value: 8}
+    cite_fields: [uv_index, uv_index_max, temperature_2m, resolved_location]
+    guidance: >
+      Advise against unprotected outdoor exercise between 11:00 and 16:00 while
+      the UV index is at or above 8. Recommend rescheduling the session to early
+      morning or after 17:00. If the session cannot move, recommend broad-
+      spectrum SPF 30+ sunscreen reapplied every two hours, a hat and
+      sunglasses, and staying in shade during rest intervals. Frame this as
+      cumulative skin-damage risk rather than an immediate emergency.
+
+  - id: SOP-005
+    title: High heat and humidity during outdoor exertion
+    category: outdoor_exercise
+    severity: high
+    applies_to:
+      activities: [cycling, running, walking, hiking, sports_field, gym_outdoor]
+      audiences: [any]
+    conditions:
+      any_of:
+        - {field: apparent_temperature, op: ">=", value: 40}
+        - {field: temperature_2m_max, op: ">=", value: 40}
+    cite_fields:
+      [apparent_temperature, temperature_2m, temperature_2m_max,
+       relative_humidity_2m, resolved_location]
+    guidance: >
+      Advise against sustained outdoor exertion while the feels-like temperature
+      is at or above 40 C. Heat illness risk rises sharply once humidity limits
+      evaporative cooling. Recommend moving the session to before 07:00 or after
+      19:00, cutting planned intensity and duration, pre-hydrating and carrying
+      water, and stopping immediately at the first sign of dizziness, nausea,
+      cramping or headache. Advise seeking medical help if symptoms do not
+      resolve promptly with rest, shade and fluids.
+
+  - id: SOP-013
+    title: Favourable conditions for outdoor exercise
+    category: outdoor_exercise
+    severity: low
+    applies_to:
+      activities: [cycling, running, walking, hiking, sports_field, gym_outdoor]
+      audiences: [self, group]
+    conditions:
+      all_of:
+        - {field: precipitation, op: "<", value: 0.5}
+        - {field: wind_gusts_10m, op: "<", value: 30}
+        - {field: apparent_temperature, op: between, value: [10, 33]}
+        - {field: uv_index, op: "<", value: 8}
+    cite_fields:
+      [temperature_2m, apparent_temperature, wind_gusts_10m, precipitation,
+       uv_index, resolved_location]
+    guidance: >
+      Conditions are within normal limits for outdoor exercise: no active
+      rainfall, gusts below 30 km/h, feels-like temperature between 10 and 33 C
+      and UV index below 8. Confirm the session can go ahead as planned. Still
+      recommend carrying water and checking conditions again before setting out
+      if the session is more than a few hours away, since conditions can shift.
+      Do not present this as a guarantee of comfort or of unchanged conditions.
+
+  # ---------------------------------------------------------------------------
+  # CATEGORY: travel_commute
+  # ---------------------------------------------------------------------------
+  - id: SOP-006
+    title: Active heavy rainfall during road travel
+    category: travel_commute
+    severity: high
+    applies_to:
+      activities: [commute_car, commute_public, motorcycling, cycling, travel_long_distance]
+      audiences: [any]
+    conditions:
+      any_of:
+        - {field: precipitation, op: ">=", value: 4}
+        - {field: precipitation_sum, op: ">=", value: 30}
+    cite_fields:
+      [precipitation, precipitation_sum, precipitation_probability_max,
+       visibility, resolved_location]
+    guidance: >
+      Warn of waterlogging, reduced braking traction and reduced visibility.
+      Recommend allowing significantly extra travel time, avoiding underpasses
+      and low-lying roads known to flood, and not attempting to drive or ride
+      through standing water of unknown depth. Advise checking for local traffic
+      and transport advisories before departure. For two-wheelers, recommend
+      deferring the trip if it is discretionary.
+
+  - id: SOP-007
+    title: High probability of rain affecting travel plans
+    category: travel_commute
+    severity: moderate
+    applies_to:
+      activities: [commute_car, commute_public, travel_long_distance, cycling, motorcycling]
+      audiences: [any]
+    conditions:
+      all_of:
+        - {field: precipitation_probability_max, op: ">=", value: 70}
+    cite_fields: [precipitation_probability_max, precipitation, resolved_location]
+    guidance: >
+      Warn of possible delays and recommend checking for service alerts or
+      traffic advisories before departure. Advise carrying rain protection,
+      building buffer time into the schedule, and having a fallback plan if the
+      trip depends on a fixed arrival time. Present this as a planning
+      precaution rather than a safety warning.
+
+  - id: SOP-008
+    title: Reduced visibility during travel
+    category: travel_commute
+    severity: high
+    applies_to:
+      activities: [commute_car, commute_public, motorcycling, cycling, travel_long_distance]
+      audiences: [any]
+    conditions:
+      all_of:
+        - {field: visibility, op: "<=", value: 2000}
+    cite_fields: [visibility, precipitation, resolved_location]
+    guidance: >
+      Warn that visibility is materially reduced. Recommend using low-beam
+      headlights and hazard awareness, increasing following distance
+      substantially, avoiding overtaking, and deferring the journey if it is
+      discretionary. For two-wheelers and cyclists, emphasise that being seen by
+      other road users is the primary risk and recommend high-visibility
+      clothing and lights, or postponing the trip.
+
+  # ---------------------------------------------------------------------------
+  # CATEGORY: vulnerable_groups
+  # ---------------------------------------------------------------------------
+  - id: SOP-009
+    title: Heat exposure for children or elderly people outdoors
+    category: vulnerable_groups
+    severity: high
+    applies_to:
+      activities: [any]
+      audiences: [child, elderly]
+    conditions:
+      any_of:
+        - {field: apparent_temperature, op: ">=", value: 35}
+        - {field: temperature_2m_max, op: ">=", value: 35}
+    cite_fields:
+      [apparent_temperature, temperature_2m, temperature_2m_max,
+       relative_humidity_2m, resolved_location]
+    guidance: >
+      Children and elderly people regulate heat less effectively and should not
+      be outdoors for extended periods while the feels-like temperature is at or
+      above 35 C. Advise keeping the outing short, confining it to before 10:00
+      or after 18:00, staying in shade, and ensuring frequent water breaks even
+      without reported thirst. Advise watching for flushed skin, unusual
+      tiredness, irritability or reduced responsiveness, and moving indoors to a
+      cool space immediately if any appear.
+
+  - id: SOP-010
+    title: Hot surfaces and heat risk for pets outdoors
+    category: vulnerable_groups
+    severity: moderate
+    applies_to:
+      activities: [any]
+      audiences: [pet]
+    conditions:
+      any_of:
+        - {field: temperature_2m, op: ">=", value: 32}
+        - {field: temperature_2m_max, op: ">=", value: 32}
+    cite_fields: [temperature_2m, temperature_2m_max, apparent_temperature, resolved_location]
+    guidance: >
+      Warn that paved surfaces can be substantially hotter than the air
+      temperature and can burn paw pads at or above 32 C air temperature.
+      Recommend walking on grass or shaded routes, testing the pavement with the
+      back of a hand for several seconds before setting out, shifting walks to
+      early morning or late evening, keeping the walk short, and carrying water.
+      Advise watching for heavy panting, drooling or reluctance to continue.
+
+  - id: SOP-011
+    title: Cold exposure for children or elderly people outdoors
+    category: vulnerable_groups
+    severity: moderate
+    applies_to:
+      activities: [any]
+      audiences: [child, elderly]
+    conditions:
+      any_of:
+        - {field: apparent_temperature, op: "<=", value: 10}
+        - {field: temperature_2m_min, op: "<=", value: 8}
+    cite_fields:
+      [apparent_temperature, temperature_2m, temperature_2m_min,
+       wind_speed_10m, resolved_location]
+    guidance: >
+      Advise limiting outdoor exposure for children and elderly people while the
+      feels-like temperature is at or below 10 C. Recommend layered clothing
+      covering head, hands and feet, keeping the outing short, and avoiding
+      exposed windy areas since wind increases effective cold. Advise returning
+      indoors if shivering, unusual quietness or numbness in fingers or toes
+      appears.
+
+  # ---------------------------------------------------------------------------
+  # CATEGORY: leisure_social  (judgment-based / fuzzy - no numeric conditions)
+  # ---------------------------------------------------------------------------
+  - id: SOP-012
+    title: General suitability of a leisure outing
+    category: leisure_social
+    severity: informational
+    applies_to:
+      activities: [picnic, park_outing, leisure_general, sports_field, walking]
+      audiences: [any]
+    # Deliberately has NO `conditions` block. "Is today nice for a picnic" has no
+    # defensible numeric threshold, so this SOP supplies the factors to weigh
+    # instead of a cutoff, and the answer must stay descriptive rather than
+    # issuing a safety verdict. See docs/DESIGN.md "The fuzzy SOP".
+    qualitative_criteria: >
+      Weigh these factors against the fetched values, in this order of
+      importance: (1) whether rain is falling now or is likely during the
+      outing; (2) whether the feels-like temperature is in a comfortable range
+      for sitting still outdoors for an hour or more, roughly 18-32 C;
+      (3) whether wind would disturb food, cloth or light objects, roughly above
+      25 km/h gusts; (4) whether UV exposure would require shade for a
+      stationary group; (5) cloud cover and humidity as comfort modifiers only.
+      Describe the trade-offs; do not convert them into a safety verdict.
+    cite_fields:
+      [temperature_2m, apparent_temperature, precipitation,
+       precipitation_probability_max, wind_gusts_10m, wind_speed_10m,
+       uv_index, cloud_cover, relative_humidity_2m, resolved_location]
+    guidance: >
+      Give a balanced, descriptive read of how pleasant the outing is likely to
+      be, naming the specific factors that help or hurt and the values behind
+      them. Where conditions are mixed, say plainly which factor is the
+      limiting one and suggest a concrete adjustment such as shifting the time
+      of day, choosing a shaded or sheltered spot, or keeping the outing short.
+      Do not issue a safety verdict under this policy and do not describe
+      conditions as safe or unsafe: if a safety-relevant threshold is genuinely
+      breached, a different SOP covers it and will lead the answer instead.
