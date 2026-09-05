@@ -604,11 +604,26 @@ def report_interpretation_failed_node(state):
 
 def report_unavailable_node(state):
     reason = state.get("failure") or "the weather service could not be reached"
+    # A 429 here is Open-Meteo rate-limiting the *server's* outbound IP, not
+    # this user's traffic or an account quota - free hosting tiers (Render's
+    # included) share outbound IPs across many unrelated customers' apps, so
+    # this can trigger from other tenants' calls, not just ours. Worth saying
+    # plainly rather than leaving it looking like an unexplained outage, since
+    # this reason string is the only account of it a reviewer hitting the
+    # deployed link will ever see.
+    if "429" in reason:
+        cause = (
+            "the weather provider is rate-limiting this server's shared hosting "
+            "IP (a free-tier hosting constraint, not an outage or a problem with "
+            "your request)"
+        )
+    else:
+        cause = reason
     text = (
         "I can't give you an answer on this one. I wasn't able to get live "
-        f"weather data ({reason}), and I won't guess at conditions I haven't "
-        "actually retrieved. Please try again shortly, or check with your local "
-        "meteorological service in the meantime."
+        f"weather data because {cause}, and I won't guess at conditions I "
+        "haven't actually retrieved. Please try again in a few minutes, or "
+        "check with your local meteorological service in the meantime."
     )
     return {
         "answer": text,

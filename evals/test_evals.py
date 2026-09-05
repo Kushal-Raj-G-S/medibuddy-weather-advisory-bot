@@ -415,6 +415,29 @@ def test_guardrail_does_not_mistake_a_cited_sop_id_for_an_invented_number():
 
 
 @pytest.mark.offline
+def test_unavailable_message_names_shared_ip_cause_for_a_429():
+    """Checking: a reviewer hitting only the deployed link, with no access to
+    logs, must not see an unexplained "weather unavailable" as if it were a
+    generic outage - a 429 from Open-Meteo means the free-tier host's shared
+    outbound IP is being rate-limited (possibly by other tenants' traffic,
+    not just ours), which is a materially different, honest explanation.
+    Pass: that specific cause is named in the reply for a 429 failure, and
+    left as the raw reason for any other kind of failure (e.g. a network
+    error), where a rate-limit explanation would be misleading."""
+    result = nodes.report_unavailable_node(
+        {"failure": "https://api.open-meteo.com/v1/forecast returned HTTP 429"}
+    )
+    assert "shared hosting" in result["answer"]
+    assert result["citation"]["reason"] == "weather_unavailable"
+
+    other = nodes.report_unavailable_node(
+        {"failure": "could not reach https://api.open-meteo.com/v1/forecast: timeout"}
+    )
+    assert "shared hosting" not in other["answer"]
+    assert "could not reach" in other["answer"]
+
+
+@pytest.mark.offline
 def test_guardrail_does_not_mistake_an_elided_sop_id_list_for_invented_numbers():
     """Checking: prose naturally elides the repeated "SOP-" prefix when listing
     several co-applying ids in one sentence (e.g. "SOP-003, 007, and 013"), so
