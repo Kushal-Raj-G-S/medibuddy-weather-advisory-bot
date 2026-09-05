@@ -73,7 +73,7 @@ export default function Home() {
 
   return (
     <div className="relative flex min-h-screen flex-col">
-      <WeatherBackground severity={severity} />
+      <WeatherBackground severity={severity} signal={messages.length} />
       <div className="grain" />
 
       <div className="mx-auto flex w-full max-w-6xl flex-1 gap-5 p-4 lg:p-6">

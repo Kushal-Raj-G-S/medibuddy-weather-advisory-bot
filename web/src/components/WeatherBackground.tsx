@@ -1,10 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Severity, skyClass } from "@/lib/severity";
 
 interface Props {
   severity: Severity;
+  // Changes once per new answer (the parent's message count). The flash is
+  // derived entirely from props - keyed on this alongside severity - rather
+  // than tracked with local state or a ref read during render: this repo's
+  // lint config (React Compiler-oriented react-hooks rules, stricter than
+  // the classic "adjust state during render via a ref" pattern) forbids
+  // reading ref.current during render, so there is no state to keep in sync
+  // in the first place. Two consecutive critical answers still each get a
+  // fresh flash because `signal` moves both times.
+  signal: number;
 }
 
 interface Cloud {
@@ -31,21 +40,13 @@ interface Drop {
   delay: number;
 }
 
-function useStable<T>(factory: () => T, deps: unknown[]): T {
-  // Recompute only when deps change, not on every render - keeps the
-  // procedurally generated cloud/star/rain layouts from jittering.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(factory, deps);
-}
+export default function WeatherBackground({ severity, signal }: Props) {
+  const flashKey = severity === "critical" ? signal : "idle";
 
-export default function WeatherBackground({ severity }: Props) {
-  const [flashKey, setFlashKey] = useState(0);
-
-  useEffect(() => {
-    if (severity === "critical") setFlashKey((k) => k + 1);
-  }, [severity]);
-
-  const clouds = useStable<Cloud[]>(
+  // Each array is only regenerated when its own inputs change (a literal
+  // deps array, so the layouts stay stable across re-renders instead of
+  // jittering every time severity-independent state changes elsewhere).
+  const clouds = useMemo<Cloud[]>(
     () =>
       Array.from({ length: severity === "informational" ? 4 : 7 }, (_, i) => ({
         id: i,
@@ -58,7 +59,7 @@ export default function WeatherBackground({ severity }: Props) {
     [severity]
   );
 
-  const stars = useStable<Star[]>(
+  const stars = useMemo<Star[]>(
     () =>
       Array.from({ length: 60 }, (_, i) => ({
         id: i,
@@ -85,7 +86,7 @@ export default function WeatherBackground({ severity }: Props) {
   };
   const [c1, c2, c3] = auroraColors[severity];
 
-  const drops = useStable<Drop[]>(
+  const drops = useMemo<Drop[]>(
     () =>
       Array.from({ length: heavyRain ? 90 : 45 }, (_, i) => ({
         id: i,
@@ -174,7 +175,10 @@ export default function WeatherBackground({ severity }: Props) {
             />
           ))}
       </div>
-      <div key={flashKey} className={`lightning-flash ${flashKey ? "active" : ""}`} />
+      <div
+        key={flashKey}
+        className={`lightning-flash ${severity === "critical" ? "active" : ""}`}
+      />
     </>
   );
 }
