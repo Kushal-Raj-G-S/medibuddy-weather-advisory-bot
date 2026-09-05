@@ -30,6 +30,15 @@ of no traffic and take 30–60s to wake back up on the next request. If the
 reviewer's first request seems to hang, that's why — not a bug. Worth
 mentioning in the form's "anything we should know" field.
 
+**Optional but recommended — eliminate the cold start instead of just
+warning about it:** `.github/workflows/keep-alive.yml` pings `/api/health`
+every 10 minutes via a free GitHub Actions schedule (unlimited minutes on a
+public repo, no new account needed). One-time setup: repo **Settings →
+Secrets and variables → Actions → Variables → New repository variable**,
+name `RENDER_HEALTH_URL`, value `https://<your-render-service>.onrender.com/api/health`.
+It no-ops harmlessly if that variable isn't set yet, so it's safe to have
+committed before you've deployed.
+
 ## 2. Deploy the frontend on Vercel
 
 1. Go to [vercel.com](https://vercel.com), sign up / log in with GitHub.
